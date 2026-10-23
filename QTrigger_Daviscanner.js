@@ -1,4 +1,3 @@
-
 // ==UserScript==
 // @name         Worten Q Trigger - Senha Mais Antiga DSP
 // @namespace    http://tampermonkey.net/
