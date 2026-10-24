@@ -1,8 +1,7 @@
-
 // ==UserScript==
 // @name         Davispeed Process Creation
 // @namespace    https://www.worten.pt/
-// @version      0.6.5
+// @version      0.6.7
 // @description  Assistente de preenchimento da Worten Resolve
 // @match        *://www.worten.pt/resolve/forms/*
 // @match        *://*.worten.pt/resolve/forms/*
@@ -155,9 +154,7 @@
     try {
       const saved = localStorage.getItem(STORE);
 
-      if (saved) {
-        return { ...DEFAULTS, ...JSON.parse(saved) };
-      }
+      if (saved) return { ...DEFAULTS, ...JSON.parse(saved) };
     } catch (error) {
       console.warn('[Davispeed] Erro no armazenamento local:', error);
     }
@@ -347,7 +344,6 @@
     }
 
     const element = exactOption(label);
-
     if (!element) return false;
 
     const target =
@@ -507,11 +503,9 @@
       : 'textarea[name="4228"]';
 
     const physical = document.querySelector(physicalSelector);
-
     if (physical && visible(physical)) return 'physical';
 
     const accessories = document.querySelector('textarea[name="4682"]');
-
     if (accessories && visible(accessories)) return 'accessories';
 
     const anomalySelector = isServiceProcess()
@@ -519,11 +513,9 @@
       : 'textarea[name="4215"]';
 
     const anomaly = document.querySelector(anomalySelector);
-
     if (anomaly && visible(anomaly)) return 'anomaly';
 
     const additional = document.querySelector('textarea[name="4265"]');
-
     if (additional && visible(additional)) return 'additional';
 
     return 'unknown';
@@ -602,7 +594,6 @@
 
   async function setPageFieldAndConfirm(selector, value, attempts = 12) {
     const wanted = String(value ?? '').trim().slice(0, 300);
-
     if (!wanted) return null;
 
     for (let i = 0; i < attempts; i++) {
@@ -664,7 +655,6 @@
       ) {
         element.scrollIntoView({ block: 'center', behavior: 'auto' });
         setNativeValue(element, wanted);
-
         await sleep(250);
 
         if (String(element.value).trim() === wanted) return element;
@@ -748,7 +738,6 @@
       String(year.value).trim() === '2022';
 
     console.log('[Davispeed] Confirmação da data 02/02/2022:', confirmed);
-
     return confirmed;
   }
 
@@ -827,7 +816,6 @@
 
     if (stopRequested) return false;
 
-    // O portal pode avançar automaticamente ao clicar no cartão.
     if (await waitForChange('serviceType', 1800)) {
       console.log('[Davispeed] O cartão avançou automaticamente.');
       return true;
@@ -838,11 +826,9 @@
 
     while (Date.now() < nextDeadline) {
       if (stopRequested) return false;
-
       if (detectStage() !== 'serviceType') return true;
 
       nextButton = findNextButton();
-
       if (nextButton) break;
 
       await sleep(250);
@@ -853,7 +839,6 @@
         'O cartão do serviço foi clicado, mas o botão Seguinte não ficou ativo.',
         'warn'
       );
-
       return false;
     }
 
@@ -869,7 +854,6 @@
         'Selecionei o cartão e cliquei em Seguinte, mas o portal não confirmou o avanço.',
         'warn'
       );
-
       return false;
     }
 
@@ -897,7 +881,6 @@
       }
 
       nextRetryCount = 0;
-
       message += ' Não foi possível encontrar o botão após várias tentativas.';
       kind = 'error';
     }
@@ -1125,8 +1108,6 @@
           continue;
         }
 
-        // O cartão do serviço é selecionado aqui e a própria função
-        // trata de avançar, para evitar cliques duplos em Seguinte.
         if (stage === 'serviceType') {
           if (!isServiceProcess()) {
             await stop(
@@ -1145,7 +1126,6 @@
                 'error'
               );
             }
-
             return;
           }
 
@@ -1212,9 +1192,7 @@
           continue;
         }
 
-        // ESTADO FÍSICO:
-        // Serviços Resolve usa name="7982".
-        // Garantia / Orçamento usa name="4228".
+        // Estado físico: 7982 em Serviços Resolve e 4228 em Garantia/Orçamento.
         if (stage === 'physical') {
           const description = String(ui.extraPhysicalDetails.value || '')
             .trim()
@@ -1229,10 +1207,7 @@
             ? 'textarea[name="7982"]'
             : 'textarea[name="4228"]';
 
-          const field = await setPageFieldAndConfirm(
-            selector,
-            description
-          );
+          const field = await setPageFieldAndConfirm(selector, description);
 
           if (!field) {
             await retryPhysicalStage(
@@ -1315,9 +1290,7 @@
           continue;
         }
 
-        // ANOMALIA:
-        // Serviços Resolve usa name="8224".
-        // Garantia / Orçamento usa name="4215".
+        // Anomalia: 8224 em Serviços Resolve e 4215 em Garantia/Orçamento.
         if (stage === 'anomaly') {
           const description = String(ui.otherProblem.value || '')
             .trim()
@@ -1335,10 +1308,7 @@
             ? 'textarea[name="8224"]'
             : 'textarea[name="4215"]';
 
-          const field = await setPageFieldAndConfirm(
-            selector,
-            description
-          );
+          const field = await setPageFieldAndConfirm(selector, description);
 
           if (!field) {
             console.error('[Davispeed] Falha ao preencher anomalia.', {
@@ -1461,8 +1431,7 @@
           continue;
         }
 
-        // INFORMAÇÃO ADICIONAL:
-        // Preencher assinatura no campo 4265 em ambos os tipos de processo.
+        // Assinatura no campo 4265 em ambos os tipos de processo.
         if (stage === 'additional') {
           const signature = String(ui.signature.value || '')
             .trim()
@@ -1477,11 +1446,7 @@
           }
 
           const selector = 'textarea[name="4265"]';
-
-          const field = await setPageFieldAndConfirm(
-            selector,
-            signature
-          );
+          const field = await setPageFieldAndConfirm(selector, signature);
 
           if (!field) {
             console.error(
@@ -1521,7 +1486,6 @@
           'Não reconheci a etapa atual e parei por segurança. Os dados do painel continuam guardados.',
           'warn'
         );
-
         return;
       }
 
@@ -1570,29 +1534,86 @@
           visibility: visible !important;
         }
 
+        /* Botão DSP: monograma redondo, mantendo a posição atual. */
         .tab {
           position: fixed;
           right: 14px;
-          bottom: 18px;
+          bottom: 38px;
           z-index: 2147483646;
-          border: 0;
-          border-radius: 999px;
-          padding: 12px 16px;
-          background: #142b4a;
+          width: 58px;
+          height: 58px;
+          padding: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          border: 1px solid #7194c6;
+          border-radius: 50%;
+          background: linear-gradient(145deg, #234b78 0%, #142b4a 55%, #0d1d33 100%);
           color: #fff;
-          font-size: 13px;
-          font-weight: 700;
-          box-shadow: 0 5px 18px #0004;
+          box-shadow: 0 6px 20px #0005, inset 0 1px 0 #ffffff26;
           cursor: pointer;
+          transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
         }
 
+        .tab:hover {
+          transform: translateY(-2px);
+          border-color: #a7c5f0;
+          box-shadow: 0 9px 24px #0006, inset 0 1px 0 #ffffff35;
+        }
+
+        .tab:active {
+          transform: translateY(0) scale(.96);
+        }
+
+        .logo-mark {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          line-height: 1;
+          white-space: nowrap;
+          user-select: none;
+        }
+
+        .logo-d {
+          position: relative;
+          z-index: 1;
+          font-size: 25px;
+          font-weight: 900;
+          letter-spacing: -3px;
+          text-shadow: 0 1px 2px #0005;
+        }
+
+        .logo-sp {
+          position: relative;
+          margin-left: 1px;
+          transform: translate(-1px, 5px);
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: -1.2px;
+          text-shadow: 0 1px 2px #0005;
+        }
+
+        /*
+         * Menu redimensionável.
+         * Altura inicial de 58vh, podendo ser aumentada ou diminuída
+         * manualmente pelo canto inferior direito.
+         */
         .panel {
           position: fixed;
           top: 4vh;
           right: 14px;
-          width: min(410px, calc(100vw - 28px));
+
+          width: 410px;
+          min-width: 300px;
+          max-width: calc(100vw - 28px);
+
+          height: 58vh;
+          min-height: 300px;
           max-height: 92vh;
+
           overflow: auto;
+          resize: both;
+
           padding: 18px;
           border: 1px solid #d8dee8;
           border-radius: 14px;
@@ -1603,7 +1624,9 @@
           font-size: 13px;
         }
 
-        .panel.open { display: block; }
+        .panel.open {
+          display: block;
+        }
 
         .head {
           display: flex;
@@ -1631,6 +1654,7 @@
           cursor: pointer;
           color: #617087;
           padding: 0 4px;
+          flex: 0 0 auto;
         }
 
         label {
@@ -1661,7 +1685,7 @@
 
         .grid {
           display: grid;
-          grid-template-columns: 1fr 1fr;
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
           gap: 10px;
         }
 
@@ -1743,8 +1767,14 @@
         }
       </style>
 
-      <button class="tab" id="toggle" type="button">
-        Davispeed Process Creation
+      <button
+        class="tab"
+        id="toggle"
+        type="button"
+        aria-label="Abrir ou fechar o painel Davispeed Process Creation"
+        title="Davispeed Process Creation"
+      >
+        <span class="logo-mark" aria-hidden="true"><span class="logo-d">D</span><span class="logo-sp">SP</span></span>
       </button>
 
       <section class="panel" id="panel" aria-label="Davispeed Process Creation">
@@ -2055,6 +2085,7 @@
           );
         } else {
           status('A retomar o preenchimento…', 'info');
+
           await sleep(800);
 
           if (state.autoContinue) void run();
