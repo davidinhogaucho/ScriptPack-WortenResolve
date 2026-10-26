@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Dawinner's Calculatorinator
 // @namespace    winners.percentagem.automatica
-// @version      4.6.1
-// @description  Calcula vendas, percentagem, contratos de hoje e converte apenas o saldo de moedas indicado no site.
+// @version      4.8.2
+// @description  Calcula vendas, contratos e previsão das moedas douradas e cinzentas do fim do mês.
 // @match        https://win20.worten.net/*
 // @run-at       document-idle
 // @grant        none
@@ -46,6 +46,35 @@
       .source-label{margin-bottom:5px;color:#949baa;font-size:10px;line-height:1.4}
       .source-number{color:#f0f1f5;font-size:15px;font-weight:700;overflow-wrap:anywhere}
       .money{color:#FFCF3D!important}
+
+      .coin-summary{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+      .coin-card{min-width:0;padding:11px;border:1px solid #343a46;border-radius:11px;background:#11151d}
+      .coin-heading{display:flex;align-items:baseline;justify-content:flex-start;flex-wrap:wrap;gap:5px}
+      .coin-label{color:#aeb4c1;font-size:11px;line-height:1.4}
+      .coin-value{font-size:9px;font-weight:650;text-align:left;overflow-wrap:anywhere;white-space:nowrap;opacity:.95}
+      .gold-card{border-color:#FFC40066}
+      .gold-card .coin-value{color:#FFC400}
+      .silver-card{border-color:#AEB6C266}
+      .silver-card .coin-value{color:#C4CBD5}
+
+      /* Barra única, compacta, para o total das moedas */
+      .total-card{
+        grid-column:1/-1;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:10px;
+        padding:8px 11px;
+      }
+      .total-card .coin-heading{flex:1;min-width:0}
+      .total-card .coin-value{color:#f4f5f7}
+      .total-card .coin-label{font-size:10px}
+      .total-card .coin-euro{margin-top:0;font-size:12px;white-space:nowrap}
+
+      .coin-euro{margin-top:6px;color:#FFCF3D;font-size:13px;font-weight:800}
+      .gold-euro{color:#FFC400}
+      .silver-euro{color:#C4CBD5}
+
       .contracts{padding:12px;border:1px solid #303542;border-radius:12px;background:#11151d}
       .contract-intro{margin:0 0 10px;color:#e9ebf1;font-size:12px;font-weight:700}
       .contract-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
@@ -68,60 +97,13 @@
       .clear{width:100%;margin-top:16px;padding:10px;color:#191D25;background:#FFCF3D;border:1px solid #FFCF3D;border-radius:10px;font-size:12px;font-weight:700;letter-spacing:1px}
       .clear:hover,.minimize:hover{background:#F0BD24;border-color:#F0BD24}
 
-      /* Botão circular de 48 px, 20 px acima, com aro dourado néon. */
-      .launcher{
-        display:none;
-        width:48px;
-        height:48px;
-        flex:0 0 48px;
-        align-items:center;
-        justify-content:center;
-        padding:0;
-        position:relative;
-        transform:translateY(-20px);
-        overflow:hidden;
-        color:#191D25;
-        background:radial-gradient(circle at 30% 22%,#FFF0A8 0%,#FFCF3D 42%,#F0BD24 100%);
-        border:2px solid #FFC400;
-        border-radius:50%;
-        box-shadow:0 7px 17px #0007,0 0 5px #FFC400,0 0 11px #FFC40088,inset 0 2px 3px #fff9,inset 0 -4px 7px #b98a00;
-        font-weight:850;
-        transition:transform .18s ease,box-shadow .18s ease,filter .18s ease
-      }
-
-      .launcher::before{
-        content:"";
-        position:absolute;
-        inset:4px 6px auto;
-        height:17px;
-        border-radius:50%;
-        background:linear-gradient(180deg,#ffffff88,#ffffff00);
-        pointer-events:none
-      }
-
-      .launcher-mark{
-        position:relative;
-        z-index:1;
-        display:flex;
-        align-items:baseline;
-        justify-content:center;
-        color:#191D25;
-        line-height:1;
-        letter-spacing:-2px;
-        text-shadow:0 1px 0 #fff7;
-        white-space:nowrap
-      }
-
+      .launcher{display:none;width:48px;height:48px;flex:0 0 48px;align-items:center;justify-content:center;padding:0;position:relative;transform:translateY(-20px);overflow:hidden;color:#191D25;background:radial-gradient(circle at 30% 22%,#FFF0A8 0%,#FFCF3D 42%,#F0BD24 100%);border:2px solid #FFC400;border-radius:50%;box-shadow:0 7px 17px #0007,0 0 5px #FFC400,0 0 11px #FFC40088,inset 0 2px 3px #fff9,inset 0 -4px 7px #b98a00;font-weight:850;transition:transform .18s ease,box-shadow .18s ease,filter .18s ease}
+      .launcher::before{content:"";position:absolute;inset:4px 6px auto;height:17px;border-radius:50%;background:linear-gradient(180deg,#ffffff88,#ffffff00);pointer-events:none}
+      .launcher-mark{position:relative;z-index:1;display:flex;align-items:baseline;justify-content:center;color:#191D25;line-height:1;letter-spacing:-2px;text-shadow:0 1px 0 #fff7;white-space:nowrap}
       .launcher-d{font-size:22px;font-weight:950;letter-spacing:-2.5px}
       .launcher-sp{margin-left:-1px;font-size:11px;font-weight:950;letter-spacing:-1.2px}
       .launcher.visible{display:flex}
-
-      .launcher:hover{
-        transform:translateY(-22px) scale(1.04);
-        filter:brightness(1.03);
-        box-shadow:0 9px 20px #0008,0 0 6px #FFC400,0 0 14px #FFC400AA,inset 0 2px 3px #fff9,inset 0 -4px 7px #b98a00
-      }
-
+      .launcher:hover{transform:translateY(-22px) scale(1.04);filter:brightness(1.03);box-shadow:0 9px 20px #0008,0 0 6px #FFC400,0 0 14px #FFC400AA,inset 0 2px 3px #fff9,inset 0 -4px 7px #b98a00}
       .launcher:active{transform:translateY(-19px) scale(.97)}
       .panel[hidden]{display:none}
       @media(max-width:420px){:host{right:10px;bottom:10px}.panel{padding:16px}}
@@ -136,6 +118,32 @@
         </div>
         <button class="minimize" type="button" title="Minimizar" aria-label="Minimizar">−</button>
       </header>
+
+      <div class="coin-summary">
+        <div class="coin-card gold-card">
+          <div class="coin-heading">
+            <div class="coin-label">Moedas Douradas</div>
+            <div class="coin-value" id="goldCoins">—</div>
+          </div>
+          <div class="coin-euro gold-euro" id="goldCoinEuro">—</div>
+        </div>
+
+        <div class="coin-card silver-card">
+          <div class="coin-heading">
+            <div class="coin-label">Moedas Cinzentas</div>
+            <div class="coin-value" id="silverCoins">—</div>
+          </div>
+          <div class="coin-euro silver-euro" id="silverCoinEuro">—</div>
+        </div>
+
+        <div class="coin-card total-card">
+          <div class="coin-heading">
+            <div class="coin-label">Total de moedas</div>
+            <div class="coin-value" id="totalCoins">—</div>
+          </div>
+          <div class="coin-euro" id="totalCoinEuro">—</div>
+        </div>
+      </div>
 
       <div class="status" role="status" aria-live="polite">
         <span class="dot"></span>
@@ -152,10 +160,6 @@
           <div class="source-number" id="goal">—</div>
         </div>
         <div class="source-card">
-          <div class="source-label">Valor das moedas em euros</div>
-          <div class="source-number money" id="coinEuro">—</div>
-        </div>
-        <div class="source-card">
           <div class="source-label" id="salesLabel">Vendas registadas</div>
           <div class="source-number" id="salesToday">—</div>
         </div>
@@ -166,6 +170,7 @@
       </div>
 
       <div class="section-title">Contratos hoje?</div>
+
       <div class="contracts">
         <p class="contract-intro">Quantos contratos foram feitos hoje?</p>
         <div class="contract-grid">
@@ -207,27 +212,14 @@
   `;
 
   const $ = selector => shadow.querySelector(selector);
+
   const MONTHS = ['JAN','FEV','MAR','ABR','MAI','JUN','JUL','AGO','SET','OUT','NOV','DEZ'];
-
-  const currencyFormat = new Intl.NumberFormat('pt-PT', {
-    style: 'currency',
-    currency: 'EUR'
-  });
-
-  const numberFormat = new Intl.NumberFormat('pt-PT', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
-
-  const ptsFormat = new Intl.NumberFormat('pt-PT', {
-    maximumFractionDigits: 2
-  });
-
+  const currencyFormat = new Intl.NumberFormat('pt-PT', { style: 'currency', currency: 'EUR' });
+  const numberFormat = new Intl.NumberFormat('pt-PT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const ptsFormat = new Intl.NumberFormat('pt-PT', { maximumFractionDigits: 2 });
   const fmt = n => numberFormat.format(n);
   const fmtPts = n => `${ptsFormat.format(n)} PTS`;
-
-  // A única conversão para euros é a do saldo lido no span específico do site.
-  const fmtEuro = coinPoints => currencyFormat.format(coinPoints / POINTS_PER_EURO);
+  const fmtEuro = coins => currencyFormat.format(coins / POINTS_PER_EURO);
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function readJson(key) {
@@ -291,120 +283,28 @@
     };
   }
 
-  let coinPoints = findCoinPoints();
-  let progress = readJson(PROGRESS_KEY);
-
-  if (
-    !progress ||
-    !Number.isFinite(progress.current) ||
-    !Number.isFinite(progress.goal) ||
-    progress.goal <= 0
-  ) {
-    progress = null;
-  }
-
-  let persisted = readJson(SALES_KEY);
-
-  if (!persisted || typeof persisted !== 'object') {
-    persisted = {
-      pending: false,
-      result: null,
-      contracts: { tech: 0, casa: 0 }
-    };
-  }
-
-  if (!('result' in persisted)) persisted.result = null;
-
-  let savedSales =
-    persisted.result && Number.isFinite(persisted.result.total)
-      ? persisted.result
-      : null;
-
-  let contracts =
-    readJson(CONTRACTS_KEY) ||
-    persisted.contracts ||
-    { tech: 0, casa: 0 };
-
-  contracts = {
-    tech: clampCount(contracts.tech),
-    casa: clampCount(contracts.casa)
-  };
-
-  $('#techCount').value = String(contracts.tech);
-  $('#casaCount').value = String(contracts.casa);
-
-  let running = false;
-  let workflowToken = 0;
-  let statusOverride = '';
-  let scanTimer = null;
-
-  function clampCount(value) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) return 0;
-    return Math.max(0, Math.min(10, Math.trunc(n)));
-  }
-
-  function getContractsFromInputs() {
-    const techRaw = Number($('#techCount').value);
-    const casaRaw = Number($('#casaCount').value);
-
-    if ($('#techCount').value.trim() === '' ||
-        !Number.isInteger(techRaw) || techRaw < 0 || techRaw > 10) {
-      throw new Error('Tech deve ser um número inteiro entre 0 e 10.');
-    }
-
-    if ($('#casaCount').value.trim() === '' ||
-        !Number.isInteger(casaRaw) || casaRaw < 0 || casaRaw > 10) {
-      throw new Error('Casa deve ser um número inteiro entre 0 e 10.');
-    }
-
-    return { tech: techRaw, casa: casaRaw };
-  }
-
-  function saveContracts() {
-    try {
-      contracts = getContractsFromInputs();
-      writeJson(CONTRACTS_KEY, contracts);
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  function contractPoints(counts = contracts) {
-    return counts.tech * TECH_POINTS + counts.casa * CASA_POINTS;
-  }
-
-  function setPersistentState(pending, result = savedSales) {
-    persisted = { pending, result, contracts };
-    writeJson(SALES_KEY, persisted);
-  }
-
-  function saveProgress(current, goal) {
-    progress = {
-      current,
-      goal,
-      updatedAt: new Date().toISOString()
-    };
-    writeJson(PROGRESS_KEY, progress);
-  }
-
-  // Lê o saldo de moedas exclusivamente do span indicado pelo utilizador.
-  function findCoinPoints() {
-    const element = [
-      ...document.querySelectorAll('span[data-v-50213549].align-middle')
-    ].find(el =>
-      isVisible(el) &&
-      Number.isFinite(parseNumber(el.textContent))
+  function isVisible(element) {
+    return !!(
+      element &&
+      element.getClientRects &&
+      element.getClientRects().length
     );
-
-    if (!element) return null;
-
-    const value = parseNumber(element.textContent);
-    return Number.isFinite(value) && value >= 0 ? value : null;
   }
 
-  // Lê o rácio do ecrã principal no formato "37401 / 55961".
+  function findCoinBalances() {
+    const values = [
+      ...document.querySelectorAll('span[data-v-50213549].align-middle')
+    ]
+      .filter(el => !host.contains(el) && isVisible(el))
+      .map(el => parseNumber(el.textContent))
+      .filter(value => Number.isFinite(value) && value >= 0);
+
+    return {
+      gold: values.length > 0 ? values[0] : null,
+      silver: values.length > 1 ? values[1] : null
+    };
+  }
+
   function findProgress() {
     for (const element of document.querySelectorAll('p.text-center.mb-0')) {
       if (host.contains(element)) continue;
@@ -419,8 +319,12 @@
       const current = parseNumber(match[1]);
       const goal = parseNumber(match[2]);
 
-      if (Number.isFinite(current) && Number.isFinite(goal) &&
-          current >= 0 && goal > 0) {
+      if (
+        Number.isFinite(current) &&
+        Number.isFinite(goal) &&
+        current >= 0 &&
+        goal > 0
+      ) {
         return { current, goal };
       }
     }
@@ -459,17 +363,9 @@
     return match ? parseNumber(match[1]) : NaN;
   }
 
-  function isVisible(element) {
-    return !!(
-      element &&
-      element.getClientRects &&
-      element.getClientRects().length
-    );
-  }
-
-  // Soma apenas os registos sob o cabeçalho da data de hoje, sem duplicar elementos DOM.
   function findTodaysSales() {
     const today = dateInfo();
+
     const timeline = [
       ...document.querySelectorAll('p.month-title, span.value-pts-sale')
     ].filter(isVisible);
@@ -482,20 +378,28 @@
     for (const element of timeline) {
       if (element.matches('p.month-title')) {
         activeDate = normalise(element.textContent);
-        if (activeDate === normalise(today.label)) dateFound = true;
+
+        if (activeDate === normalise(today.label)) {
+          dateFound = true;
+        }
+
         continue;
       }
 
-      if (!element.matches('span.value-pts-sale') ||
-          activeDate !== normalise(today.label) ||
-          seenElements.has(element)) {
+      if (
+        !element.matches('span.value-pts-sale') ||
+        activeDate !== normalise(today.label) ||
+        seenElements.has(element)
+      ) {
         continue;
       }
 
       seenElements.add(element);
-
       const value = readSalePoints(element);
-      if (Number.isFinite(value) && value >= 0) values.push(value);
+
+      if (Number.isFinite(value) && value >= 0) {
+        values.push(value);
+      }
     }
 
     if (!dateFound) return null;
@@ -513,9 +417,12 @@
     const deadline = Date.now() + timeoutMs;
 
     while (Date.now() < deadline) {
-      if (token !== workflowToken) throw new Error('Cálculo cancelado.');
+      if (token !== workflowToken) {
+        throw new Error('Cálculo cancelado.');
+      }
 
       let result;
+
       try {
         result = test();
       } catch (_) {
@@ -533,16 +440,33 @@
     $('#current').textContent = progress ? fmtPts(progress.current) : '—';
     $('#goal').textContent = progress ? fmtPts(progress.goal) : '—';
 
-    // Apenas este saldo é convertido para euros.
-    $('#coinEuro').textContent =
-      coinPoints !== null ? fmtEuro(coinPoints) : '—';
+    const gold = coinBalances.gold;
+    const silver = coinBalances.silver;
+    const totalCoins = gold !== null && silver !== null ? gold + silver : null;
+
+    $('#goldCoins').textContent =
+      gold !== null ? `${ptsFormat.format(gold)} moedas` : '—';
+
+    $('#silverCoins').textContent =
+      silver !== null ? `${ptsFormat.format(silver)} moedas` : '—';
+
+    $('#goldCoinEuro').textContent =
+      gold !== null ? `≈ ${fmtEuro(gold)}` : '—';
+
+    $('#silverCoinEuro').textContent =
+      silver !== null ? `≈ ${fmtEuro(silver)}` : '—';
+
+    $('#totalCoins').textContent =
+      totalCoins !== null ? ptsFormat.format(totalCoins) : '—';
+
+    $('#totalCoinEuro').textContent =
+      totalCoins !== null ? `≈ ${fmtEuro(totalCoins)}` : '—';
 
     $('#salesToday').textContent = savedSales ? fmtPts(savedSales.total) : '—';
     $('#salesCount').textContent = savedSales ? String(savedSales.count) : '—';
 
-    $('#salesLabel').textContent = savedSales
-      ? `Vendas (${savedSales.dateLabel})`
-      : 'Vendas registadas';
+    $('#salesLabel').textContent =
+      savedSales ? `Vendas (${savedSales.dateLabel})` : 'Vendas registadas';
 
     $('#savedDate').textContent =
       savedSales && savedSales.updatedAt
@@ -550,25 +474,28 @@
         : '—';
 
     $('#calculateBtn').disabled = running;
-    $('#calculateBtn').textContent = running
-      ? 'A CALCULAR...'
-      : 'CALCULAR VALOR TOTAL';
+    $('#calculateBtn').textContent =
+      running ? 'A CALCULAR...' : 'CALCULAR VALOR TOTAL';
 
-    $('#statusText').textContent = statusOverride || (
-      savedSales
-        ? `Resultado de ${savedSales.dateLabel} guardado. Só é apagado ao carregar em LIMPAR.`
-        : progress
-          ? 'Objetivo guardado. Ao calcular, serão lidas as vendas e depois adicionados os contratos.'
-          : 'Abre o ecrã do objetivo para guardar automaticamente o valor atual e o objetivo.'
-    );
+    $('#statusText').textContent =
+      statusOverride ||
+      (
+        savedSales
+          ? `Resultado de ${savedSales.dateLabel} guardado. Só é apagado ao carregar em LIMPAR.`
+          : progress
+            ? 'Objetivo guardado. Ao calcular, serão lidas as vendas e depois adicionados os contratos.'
+            : 'Abre o ecrã do objetivo para guardar automaticamente o valor atual e o objetivo.'
+      );
 
-    const counts = savedSales && savedSales.contracts
-      ? savedSales.contracts
-      : contracts;
+    const counts =
+      savedSales && savedSales.contracts
+        ? savedSales.contracts
+        : contracts;
 
-    const bonus = savedSales && Number.isFinite(savedSales.contractBonus)
-      ? savedSales.contractBonus
-      : contractPoints(counts);
+    const bonus =
+      savedSales && Number.isFinite(savedSales.contractBonus)
+        ? savedSales.contractBonus
+        : contractPoints(counts);
 
     $('#contractBonus').textContent = fmtPts(bonus);
 
@@ -577,8 +504,10 @@
       $('#finalValue').textContent = '—';
       $('#currentPercent').textContent = '—';
       $('#bar').style.width = '0%';
+
       $('#description').textContent =
         'Ainda não foi guardado o objetivo. Abre o ecrã que mostra "valor atual / objetivo" e depois volta a calcular.';
+
       return;
     }
 
@@ -588,9 +517,13 @@
     if (!savedSales) {
       $('#percentage').textContent = '—';
       $('#finalValue').textContent = '—';
-      $('#bar').style.width = `${Math.max(0, Math.min(currentPercent, 100))}%`;
+
+      $('#bar').style.width =
+        `${Math.max(0, Math.min(currentPercent, 100))}%`;
+
       $('#description').textContent =
         'Carrega em CALCULAR VALOR TOTAL. O script soma primeiro as vendas de hoje e só depois adiciona os contratos Tech/Casa.';
+
       return;
     }
 
@@ -599,10 +532,15 @@
 
     $('#percentage').textContent = `${fmt(finalPercent)}%`;
     $('#finalValue').textContent = fmtPts(finalValue);
-    $('#description').textContent =
-      `${fmtPts(progress.current)} atuais + ${fmtPts(savedSales.total)} de vendas registadas + ${fmtPts(bonus)} de contratos (${counts.tech} Tech, ${counts.casa} Casa) = ${fmtPts(finalValue)}. A conversão para euros aplica-se apenas ao saldo de moedas lido no span específico do site.`;
 
-    $('#bar').style.width = `${Math.max(0, Math.min(finalPercent, 100))}%`;
+    $('#description').textContent =
+      `${fmtPts(progress.current)} atuais + ` +
+      `${fmtPts(savedSales.total)} de vendas registadas + ` +
+      `${fmtPts(bonus)} de contratos ` +
+      `(${counts.tech} Tech, ${counts.casa} Casa) = ${fmtPts(finalValue)}.`;
+
+    $('#bar').style.width =
+      `${Math.max(0, Math.min(finalPercent, 100))}%`;
   }
 
   async function collectSales(token) {
@@ -611,28 +549,35 @@
 
     if (!isSalesPage()) {
       const link = findSalesLink();
+
       if (link) {
         link.click();
       } else {
         location.href = new URL('/mobile/m/sales', location.origin).href;
       }
+
       await waitFor(() => isSalesPage(), 25000, token);
     }
 
     statusOverride = 'A abrir o separador REGISTADAS...';
     render();
 
-    const tab = await waitFor(() => findRegisteredTab(), 20000, token);
+    const tab = await waitFor(
+      () => findRegisteredTab(),
+      20000,
+      token
+    );
 
     if (tab.getAttribute('aria-selected') !== 'true') {
       tab.click();
 
       await waitFor(() => {
         const currentTab = findRegisteredTab();
+
         return currentTab &&
           currentTab.getAttribute('aria-selected') === 'true'
-            ? currentTab
-            : null;
+          ? currentTab
+          : null;
       }, 10000, token);
     }
 
@@ -643,7 +588,9 @@
     let dateWithoutValuesSince = null;
 
     while (Date.now() < deadline) {
-      if (token !== workflowToken) throw new Error('Cálculo cancelado.');
+      if (token !== workflowToken) {
+        throw new Error('Cálculo cancelado.');
+      }
 
       const result = findTodaysSales();
 
@@ -654,7 +601,9 @@
           dateWithoutValuesSince = Date.now();
         }
 
-        if (Date.now() - dateWithoutValuesSince >= 8000) return result;
+        if (Date.now() - dateWithoutValuesSince >= 8000) {
+          return result;
+        }
       } else {
         dateWithoutValuesSince = null;
       }
@@ -670,6 +619,7 @@
   function returnToHome() {
     statusOverride =
       'Cálculo concluído e guardado. A regressar à página Home...';
+
     render();
 
     const homeLink = [
@@ -678,6 +628,7 @@
       )
     ].find(link => {
       if (!isVisible(link)) return false;
+
       return normalise(
         link.querySelector('span')?.textContent ||
         link.textContent ||
@@ -688,7 +639,9 @@
     if (homeLink) {
       homeLink.click();
     } else {
-      window.location.assign(new URL('/mobile/m/', location.origin).href);
+      window.location.assign(
+        new URL('/mobile/m/', location.origin).href
+      );
     }
   }
 
@@ -706,12 +659,12 @@
 
     running = true;
     const token = ++workflowToken;
+
     setPersistentState(true, savedSales);
     statusOverride = 'A preparar o cálculo das vendas...';
     render();
 
     try {
-      // A rotina de Vendas → REGISTADAS termina antes de adicionar os contratos.
       const result = await collectSales(token);
       if (token !== workflowToken) return;
 
@@ -729,6 +682,7 @@
       };
 
       setPersistentState(false, savedSales);
+
       statusOverride =
         `Vendas somadas; bónus de ${fmtPts(bonus)} adicionado. A regressar à Home...`;
 
@@ -740,9 +694,11 @@
       if (token !== workflowToken) return;
 
       setPersistentState(false, savedSales);
-      statusOverride = error.message === 'Cálculo cancelado.'
-        ? 'Cálculo cancelado.'
-        : `Não foi possível terminar: ${error.message}`;
+
+      statusOverride =
+        error.message === 'Cálculo cancelado.'
+          ? 'Cálculo cancelado.'
+          : `Não foi possível terminar: ${error.message}`;
     } finally {
       if (token === workflowToken) {
         running = false;
@@ -751,6 +707,113 @@
     }
   }
 
+  function clampCount(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 0;
+    return Math.max(0, Math.min(10, Math.trunc(n)));
+  }
+
+  function getContractsFromInputs() {
+    const techRaw = Number($('#techCount').value);
+    const casaRaw = Number($('#casaCount').value);
+
+    if (
+      $('#techCount').value.trim() === '' ||
+      !Number.isInteger(techRaw) ||
+      techRaw < 0 ||
+      techRaw > 10
+    ) {
+      throw new Error('Tech deve ser um número inteiro entre 0 e 10.');
+    }
+
+    if (
+      $('#casaCount').value.trim() === '' ||
+      !Number.isInteger(casaRaw) ||
+      casaRaw < 0 ||
+      casaRaw > 10
+    ) {
+      throw new Error('Casa deve ser um número inteiro entre 0 e 10.');
+    }
+
+    return { tech: techRaw, casa: casaRaw };
+  }
+
+  function saveContracts() {
+    try {
+      contracts = getContractsFromInputs();
+      writeJson(CONTRACTS_KEY, contracts);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function contractPoints(counts = contracts) {
+    return counts.tech * TECH_POINTS + counts.casa * CASA_POINTS;
+  }
+
+  function setPersistentState(pending, result = savedSales) {
+    persisted = { pending, result, contracts };
+    writeJson(SALES_KEY, persisted);
+  }
+
+  function saveProgress(current, goal) {
+    progress = {
+      current,
+      goal,
+      updatedAt: new Date().toISOString()
+    };
+
+    writeJson(PROGRESS_KEY, progress);
+  }
+
+  let coinBalances = { gold: null, silver: null };
+  let progress = readJson(PROGRESS_KEY);
+
+  if (
+    !progress ||
+    !Number.isFinite(progress.current) ||
+    !Number.isFinite(progress.goal) ||
+    progress.goal <= 0
+  ) {
+    progress = null;
+  }
+
+  let persisted = readJson(SALES_KEY);
+
+  if (!persisted || typeof persisted !== 'object') {
+    persisted = {
+      pending: false,
+      result: null,
+      contracts: { tech: 0, casa: 0 }
+    };
+  }
+
+  if (!('result' in persisted)) persisted.result = null;
+
+  let savedSales =
+    persisted.result && Number.isFinite(persisted.result.total)
+      ? persisted.result
+      : null;
+
+  let contracts =
+    readJson(CONTRACTS_KEY) ||
+    persisted.contracts ||
+    { tech: 0, casa: 0 };
+
+  contracts = {
+    tech: clampCount(contracts.tech),
+    casa: clampCount(contracts.casa)
+  };
+
+  let running = false;
+  let workflowToken = 0;
+  let statusOverride = '';
+  let scanTimer = null;
+
+  $('#techCount').value = String(contracts.tech);
+  $('#casaCount').value = String(contracts.casa);
+
   $('#techCount').addEventListener('change', () => {
     if (!saveContracts()) {
       statusOverride =
@@ -758,6 +821,7 @@
     } else {
       statusOverride = '';
     }
+
     render();
   });
 
@@ -768,6 +832,7 @@
     } else {
       statusOverride = '';
     }
+
     render();
   });
 
@@ -778,8 +843,10 @@
     running = false;
     savedSales = null;
     setPersistentState(false, null);
+
     statusOverride =
       'Resultado das vendas apagado. O objetivo e os contratos escolhidos foram mantidos.';
+
     render();
   });
 
@@ -795,22 +862,27 @@
 
   function scanProgress() {
     let changed = false;
-
     const found = findProgress();
 
-    if (found && (
-      !progress ||
-      progress.current !== found.current ||
-      progress.goal !== found.goal
-    )) {
+    if (
+      found &&
+      (
+        !progress ||
+        progress.current !== found.current ||
+        progress.goal !== found.goal
+      )
+    ) {
       saveProgress(found.current, found.goal);
       changed = true;
     }
 
-    const foundCoinPoints = findCoinPoints();
+    const foundBalances = findCoinBalances();
 
-    if (foundCoinPoints !== coinPoints) {
-      coinPoints = foundCoinPoints;
+    if (
+      foundBalances.gold !== coinBalances.gold ||
+      foundBalances.silver !== coinBalances.silver
+    ) {
+      coinBalances = foundBalances;
       changed = true;
     }
 
@@ -819,6 +891,7 @@
 
   const observer = new MutationObserver(() => {
     if (scanTimer !== null) clearTimeout(scanTimer);
+
     scanTimer = setTimeout(() => {
       scanTimer = null;
       scanProgress();
@@ -835,7 +908,6 @@
   scanProgress();
   render();
 
-  // Se a navegação recarregar durante o fluxo, retoma com os contratos guardados.
   if (persisted.pending) {
     setTimeout(() => runCalculation(), 500);
   }
