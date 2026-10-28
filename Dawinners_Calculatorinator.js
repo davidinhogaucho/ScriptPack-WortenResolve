@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Dawinner's Calculatorinator
 // @namespace    winners.percentagem.automatica
-// @version      4.8.2
+// @version      3.0
 // @description  Calcula vendas, contratos e previsão das moedas douradas e cinzentas do fim do mês.
 // @match        https://win20.worten.net/*
 // @run-at       document-idle
