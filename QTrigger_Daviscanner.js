@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Worten Q Trigger - Senha Mais Antiga DSP
 // @namespace    http://tampermonkey.net/
-// @version      4.8
+// @version      3.0
 // @match        https://queuemanager-q-trigger.worten.site/*
 // @run-at       document-end
 // @grant        none
