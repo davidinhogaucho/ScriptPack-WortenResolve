@@ -1,191 +1,163 @@
+```javascript
 // ==UserScript==
 // @name         Worten Q Trigger - Senha Mais Antiga DSP
 // @namespace    http://tampermonkey.net/
 // @version      4.8
-// @description  Prioridade às senhas E, seleção pela maior espera, animação e reinicialização interna.
 // @match        https://queuemanager-q-trigger.worten.site/*
+// @run-at       document-end
 // @grant        none
-// @run-at       document-idle
 // ==/UserScript==
 
 (function () {
     'use strict';
 
-    // ============================================================
-    // CONFIGURAÇÕES
-    // ============================================================
+    const BOTAO_ID = 'btn-chamar-mais-antiga';
+    const WRAPPER_ID = 'wrapper-botoes-lado-a-lado';
+    const ESTILO_ID = 'dsp-animations-style';
+    const INTERVALO_REINICIO = 60000;
 
-    const DSP = {
-        intervaloReinicio: 60000,
-        atrasoInicial: 1500,
-        atrasoDepoisTerminar: 1500,
-        tentativasBotaoManual: 25,
-        intervaloTentativas: 200,
-        seletorFila: '.waiting-tickets-expanded',
-        seletorSenha: '.typology-item',
-        seletorCodigo: '.typology-code',
-        seletorTempo: '.typology-time',
-        seletorBotaoNativo: 'button.primary.action-button',
-        seletorBotaoManual: 'button.manual-button'
-    };
+    let aChamar = false;
+    let resetAgendado = false;
+    let tentouAtivarTipologia = false;
+    let ultimaAssinatura = '';
+    let temporizadorObserver = null;
+    let observerAtivo = false;
 
-    let observador = null;
-    let temporizadorReinicio = null;
-    let botaoPersonalizado = null;
-    let wrapperBotao = null;
-    let processando = false;
-    let reiniciando = false;
-    let ultimaSenhaSelecionada = null;
-    let estiloOriginalBotao = null;
-    let botaoNativoGuardado = null;
-    let identificadorReinicio = 0;
+    const normalizar = texto => String(texto || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
 
-    // ============================================================
-    // FUNÇÕES AUXILIARES
-    // ============================================================
-
-    function normalizar(texto) {
-        return String(texto || '')
-            .replace(/\s+/g, ' ')
-            .trim();
-    }
-
-    function visivel(elemento) {
-        if (!elemento || !elemento.isConnected) {
-            return false;
-        }
-
-        const estilo = window.getComputedStyle(elemento);
-        const rect = elemento.getBoundingClientRect();
-
-        return (
-            estilo.display !== 'none' &&
-            estilo.visibility !== 'hidden' &&
-            Number(estilo.opacity) !== 0 &&
-            rect.width > 0 &&
-            rect.height > 0
+    function visivel(el) {
+        return !!(
+            el &&
+            el.isConnected &&
+            (el.offsetWidth || el.offsetHeight ||
+             el.getClientRects().length)
         );
     }
 
+    // Converte os tempos para segundos.
     function paraSegundos(texto) {
-        if (!texto) {
-            return null;
-        }
+        const valor = normalizar(texto).replace(/,/g, '.');
+        if (!valor) return null;
 
-        const valor = normalizar(texto);
+        const relogio = valor.match(
+            /(\d{1,4}:\d{1,2}(?::\d{1,2})?)/
+        );
 
-        // Formato MM:SS ou HH:MM:SS.
-        if (!/^\d{1,3}:\d{2}(:\d{2})?$/.test(valor)) {
-            return null;
-        }
+        if (relogio) {
+            const partes = relogio[1].split(':').map(Number);
 
-        const partes = valor.split(':').map(Number);
-
-        if (partes.some(numero => !Number.isFinite(numero))) {
-            return null;
-        }
-
-        if (partes.length === 2) {
-            const [minutos, segundos] = partes;
-
-            if (segundos > 59) {
+            if (partes.some(n => !Number.isFinite(n) || n < 0)) {
                 return null;
             }
 
-            return minutos * 60 + segundos;
+            if (partes.length === 3) {
+                if (partes[1] >= 60 || partes[2] >= 60) {
+                    return null;
+                }
+
+                return partes[0] * 3600 +
+                    partes[1] * 60 + partes[2];
+            }
+
+            if (partes[1] >= 60) return null;
+
+            return partes[0] * 60 + partes[1];
         }
 
-        const [horas, minutos, segundos] = partes;
+        const unidades =
+            /(\d+(?:\.\d+)?)\s*(dias?|d|horas?|hrs?|h|minutos?|mins?|min|segundos?|segs?|secs?|s)\b/g;
 
-        if (minutos > 59 || segundos > 59) {
-            return null;
+        let total = 0;
+        let encontrou = false;
+        let m;
+
+        while ((m = unidades.exec(valor)) !== null) {
+            const n = Number(m[1]);
+            const u = m[2];
+
+            if (!Number.isFinite(n)) continue;
+
+            if (['d', 'dia', 'dias'].includes(u)) {
+                total += n * 86400;
+            } else if (
+                ['h', 'hr', 'hrs', 'hora', 'horas'].includes(u)
+            ) {
+                total += n * 3600;
+            } else if (
+                ['min', 'mins', 'minuto', 'minutos'].includes(u)
+            ) {
+                total += n * 60;
+            } else {
+                total += n;
+            }
+
+            encontrou = true;
         }
 
-        return horas * 3600 + minutos * 60 + segundos;
+        return encontrou ? Math.round(total) : null;
     }
 
-    function obterTexto(elemento, seletor) {
-        const alvo = elemento.querySelector(seletor);
-        return alvo ? normalizar(alvo.textContent) : '';
-    }
-
-    // ============================================================
-    // LER AS SENHAS QUE ESTÃO À ESPERA
-    // ============================================================
-
+    // Lê as senhas de todas as tipologias.
     function lerSenhas() {
-        const fila = document.querySelector(DSP.seletorFila);
+        const raiz = document.querySelector(
+            '.waiting-tickets-expanded'
+        );
 
-        if (!fila || !visivel(fila)) {
+        if (!raiz) {
             return {
-                filaEncontrada: false,
                 senhas: [],
-                invalidas: []
+                invalidas: [],
+                filaEncontrada: false
             };
         }
-
-        const elementos = Array.from(
-            fila.querySelectorAll(DSP.seletorSenha)
-        );
 
         const senhas = [];
         const invalidas = [];
 
-        for (const elemento of elementos) {
-            if (!visivel(elemento)) {
-                continue;
-            }
+        raiz.querySelectorAll(
+            '.typology-column .typology-items .typology-item'
+        ).forEach(el => {
+            if (!visivel(el)) return;
 
-            const codigo = obterTexto(
-                elemento,
-                DSP.seletorCodigo
-            );
+            const codigo = (
+                el.querySelector('.typology-code')?.textContent || ''
+            ).trim().replace(/\s+/g, '');
 
-            const textoTempo = obterTexto(
-                elemento,
-                DSP.seletorTempo
-            );
+            const textoTempo = (
+                el.querySelector('.typology-time')?.textContent || ''
+            ).trim();
 
-            if (!codigo || !textoTempo) {
-                continue;
-            }
+            if (!codigo && !textoTempo) return;
 
             const segundos = paraSegundos(textoTempo);
+            const coluna = el.closest('.typology-column');
 
-            if (segundos === null) {
-                invalidas.push({
-                    codigo,
-                    textoTempo
-                });
-
-                continue;
+            if (!codigo || !textoTempo || segundos === null) {
+                invalidas.push({ codigo, textoTempo });
+                return;
             }
 
             senhas.push({
                 codigo,
                 textoTempo,
                 segundos,
-                elemento
+                tipologia: (
+                    coluna?.querySelector('.typology-header')?.textContent || ''
+                ).trim()
             });
-        }
+        });
 
-        return {
-            filaEncontrada: true,
-            senhas,
-            invalidas
-        };
+        return { senhas, invalidas, filaEncontrada: true };
     }
 
-    // ============================================================
-    // ESCOLHER A SENHA
-    //
-    // PRIORIDADE 1:
-    // Se houver senhas E, escolher a E com maior espera.
-    //
-    // PRIORIDADE 2:
-    // Se não houver senhas E, escolher a senha com maior espera.
-    // ============================================================
-
+    // Prioridade:
+    // 1. Senhas E, se existirem.
+    // 2. Dentro das senhas E, maior tempo de espera.
+    // 3. Se não existirem senhas E, maior tempo de espera global.
     function obterMaisAntiga() {
         const dados = lerSenhas();
 
@@ -197,884 +169,668 @@
             };
         }
 
-        if (dados.invalidas.length > 0) {
-            console.warn(
-                '[DSP] Existem senhas com tempos não reconhecidos:',
-                dados.invalidas
-            );
-        }
-
-        if (dados.senhas.length === 0) {
+        if (dados.invalidas.length) {
             return {
                 senha: null,
-                senhas: [],
-                erro: dados.invalidas.length
-                    ? 'Não foi possível interpretar os tempos das senhas.'
-                    : null
-            };
-        }
-
-        // Identifica as senhas da letra E.
-        // Exemplos aceites: E011, E 011, E  011.
-        const prioritarias = dados.senhas.filter(senha => {
-            const codigoLimpo = senha.codigo.replace(/\s+/g, '');
-
-            return /^E\d+/i.test(codigoLimpo);
-        });
-
-        // PRIORIDADE 1: escolher uma senha E, se existir.
-        if (prioritarias.length > 0) {
-            prioritarias.sort(
-                (a, b) => b.segundos - a.segundos
-            );
-
-            const selecionada = prioritarias[0];
-
-            console.log(
-                '[DSP] Senha prioritária selecionada:',
-                selecionada.codigo,
-                '| Espera:',
-                selecionada.textoTempo
-            );
-
-            return {
-                senha: selecionada,
                 senhas: dados.senhas,
-                erro: null
+                erro: 'Há senhas com tempos não reconhecidos.'
             };
         }
 
-        // PRIORIDADE 2: não existem senhas E.
-        // Escolher a senha com o maior tempo de espera.
-        let maisAntiga = null;
+        // Aceita códigos como E001 e E 001.
+        const senhasE = dados.senhas.filter(s =>
+            /^E\d/i.test(s.codigo.replace(/\s+/g, ''))
+        );
 
-        for (const senha of dados.senhas) {
-            if (
-                !maisAntiga ||
-                senha.segundos > maisAntiga.segundos
-            ) {
-                maisAntiga = senha;
+        // Se houver senhas E, ignora as restantes para a seleção.
+        const candidatas = senhasE.length > 0
+            ? senhasE
+            : dados.senhas;
+
+        let maior = null;
+
+        for (const senha of candidatas) {
+            if (!maior || senha.segundos > maior.segundos) {
+                maior = senha;
             }
         }
 
-        console.log(
-            '[DSP] Sem senhas prioritárias. Selecionada:',
-            maisAntiga.codigo,
-            '| Espera:',
-            maisAntiga.textoTempo
-        );
-
         return {
-            senha: maisAntiga,
+            senha: maior,
             senhas: dados.senhas,
             erro: null
         };
     }
 
-    // ============================================================
-    // ESTILOS E ANIMAÇÕES
-    // ============================================================
-
+    // Animação DSP e bilhete a ser puxado.
     function instalarAnimacoes() {
-        if (document.getElementById('dsp-estilos')) {
-            return;
-        }
+        if (document.getElementById(ESTILO_ID)) return;
 
-        const estilo = document.createElement('style');
-        estilo.id = 'dsp-estilos';
+        const style = document.createElement('style');
+        style.id = ESTILO_ID;
 
-        estilo.textContent = `
-            .dsp-botao-wrapper {
-                position: absolute !important;
-                z-index: 99999 !important;
-                margin: 0 !important;
-                padding: 0 !important;
+        style.textContent = `
+            @keyframes dspPass {
+                0%,82% {
+                    left:0%;
+                    opacity:0;
+                    transform:translateX(-110%);
+                }
+                84% { opacity:.12; }
+                91% {
+                    left:100%;
+                    opacity:.20;
+                    transform:translateX(-100%);
+                }
+                93%,100% {
+                    left:100%;
+                    opacity:0;
+                    transform:translateX(0);
+                }
             }
 
-            .dsp-botao-personalizado {
-                width: 100% !important;
-                height: 100% !important;
-                min-height: 38px;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                gap: 8px !important;
-                border: none !important;
-                border-radius: 6px !important;
-                padding: 8px 14px !important;
-                font: inherit !important;
-                font-weight: 600 !important;
-                color: #fff !important;
-                background: #1769aa !important;
-                cursor: pointer !important;
-                box-shadow: 0 2px 5px rgba(0,0,0,.15);
-                transition:
-                    background .2s ease,
-                    transform .15s ease,
-                    box-shadow .2s ease;
+            #${BOTAO_ID}::after {
+                content:"dsp";
+                position:absolute;
+                top:5px;
+                left:0;
+                z-index:2;
+                pointer-events:none;
+                font-size:9px;
+                font-weight:800;
+                letter-spacing:2px;
+                color:rgba(59,43,0,.32);
+                opacity:0;
+                animation:dspPass 18s linear infinite;
             }
 
-            .dsp-botao-personalizado:hover {
-                background: #12578f !important;
-                box-shadow: 0 4px 9px rgba(0,0,0,.2);
-            }
-
-            .dsp-botao-personalizado:active {
-                transform: scale(.98);
-            }
-
-            .dsp-botao-personalizado:disabled {
-                opacity: .65 !important;
-                cursor: wait !important;
-            }
-
-            .dsp-botao-personalizado.dsp-sem-senhas {
-                background: #687782 !important;
-            }
-
-            .dsp-indicador {
-                position: fixed;
-                right: 12px;
-                bottom: 12px;
-                z-index: 99998;
-                padding: 4px 8px;
-                border-radius: 5px;
-                background: rgba(23, 105, 170, .12);
-                color: #1769aa;
-                font-size: 10px;
-                font-weight: 700;
-                letter-spacing: 1px;
-                pointer-events: none;
-                opacity: .7;
+            @keyframes dspTicketPull {
+                0% {
+                    opacity:0;
+                    transform:translate(-50%,-50%)
+                               translate(0,12px) scale(.65) rotate(0);
+                }
+                18% {
+                    opacity:1;
+                    transform:translate(-50%,-50%)
+                               translate(0,0) scale(1) rotate(-2deg);
+                }
+                45% {
+                    opacity:1;
+                    transform:translate(-50%,-50%)
+                               translate(30px,-35px) scale(.94) rotate(5deg);
+                }
+                100% {
+                    opacity:0;
+                    transform:translate(-50%,-50%)
+                               translate(125px,-125px) scale(.72) rotate(16deg);
+                }
             }
 
             .dsp-ticket-flight {
-                position: fixed;
-                z-index: 100000;
-                pointer-events: none;
-                box-sizing: border-box;
-                padding: 12px 18px;
-                border: 2px dashed #1769aa;
-                border-radius: 8px;
-                background: #fff;
-                color: #1769aa;
-                font-size: 20px;
-                font-weight: 800;
-                white-space: nowrap;
-                box-shadow: 0 8px 22px rgba(0,0,0,.2);
-                animation: dsp-ticket-puxado .85s ease-in forwards;
-            }
-
-            .dsp-ticket-flight::before,
-            .dsp-ticket-flight::after {
-                content: "";
-                position: absolute;
-                top: 50%;
-                width: 8px;
-                height: 8px;
-                border-radius: 50%;
-                background: #fff;
-                border: 1px solid #1769aa;
-                transform: translateY(-50%);
-            }
-
-            .dsp-ticket-flight::before {
-                left: -5px;
+                position:fixed;
+                z-index:2147483647;
+                width:142px;
+                height:46px;
+                box-sizing:border-box;
+                display:flex;
+                align-items:center;
+                justify-content:space-between;
+                gap:8px;
+                padding:7px 12px;
+                background:linear-gradient(135deg,#fffdf1,#f6df9a);
+                color:#503a08;
+                border:1px solid #b38728;
+                border-radius:5px;
+                box-shadow:0 8px 20px rgba(0,0,0,.20);
+                pointer-events:none;
+                animation:dspTicketPull 900ms cubic-bezier(.22,.72,.24,1) forwards;
             }
 
             .dsp-ticket-flight::after {
-                right: -5px;
+                content:"";
+                position:absolute;
+                top:5px;
+                bottom:5px;
+                left:48px;
+                border-left:1px dashed rgba(80,58,8,.4);
             }
 
-            @keyframes dsp-ticket-puxado {
-                0% {
-                    opacity: 0;
-                    transform: translate(0, 0) rotate(0deg) scale(.85);
+            .dsp-ticket-label {
+                font-size:8px;
+                font-weight:700;
+                letter-spacing:1px;
+            }
+
+            .dsp-ticket-code {
+                font-size:15px;
+                font-weight:900;
+            }
+
+            @media (prefers-reduced-motion: reduce) {
+                #${BOTAO_ID}::after {
+                    animation:none;
+                    display:none;
                 }
 
-                15% {
-                    opacity: 1;
-                    transform: translate(0, -8px) rotate(-2deg) scale(1);
-                }
-
-                45% {
-                    opacity: 1;
-                    transform: translate(-35px, -22px) rotate(-5deg) scale(.95);
-                }
-
-                100% {
-                    opacity: 0;
-                    transform: translate(150px, -110px) rotate(12deg) scale(.55);
+                .dsp-ticket-flight {
+                    animation-duration:1ms;
                 }
             }
         `;
 
-        document.head.appendChild(estilo);
+        document.head.appendChild(style);
     }
 
-    function instalarIndicador() {
-        if (document.getElementById('dsp-indicador')) {
-            return;
-        }
+    function animarSenhaPuxada(codigo) {
+        instalarAnimacoes();
 
-        const indicador = document.createElement('div');
+        const botao = document.getElementById(BOTAO_ID);
+        if (!botao) return;
 
-        indicador.id = 'dsp-indicador';
-        indicador.className = 'dsp-indicador';
-        indicador.textContent = 'DSP';
+        const rect = botao.getBoundingClientRect();
+        const ticket = document.createElement('div');
 
-        document.body.appendChild(indicador);
+        ticket.className = 'dsp-ticket-flight';
+        ticket.style.left = `${rect.left + rect.width / 2}px`;
+        ticket.style.top = `${rect.top + rect.height / 2}px`;
+
+        const label = document.createElement('span');
+        label.className = 'dsp-ticket-label';
+        label.textContent = 'SENHA';
+
+        const codigoElemento = document.createElement('span');
+        codigoElemento.className = 'dsp-ticket-code';
+        codigoElemento.textContent = codigo;
+
+        ticket.append(label, codigoElemento);
+        document.body.appendChild(ticket);
+
+        ticket.addEventListener('animationend', () => ticket.remove(), {
+            once: true
+        });
+
+        setTimeout(() => ticket.remove(), 1500);
     }
-
-    function animarSenhaPuxada(codigo, origem) {
-        const bilhete = document.createElement('div');
-
-        bilhete.className = 'dsp-ticket-flight';
-        bilhete.textContent = codigo;
-
-        let x = window.innerWidth / 2;
-        let y = window.innerHeight / 2;
-
-        if (origem && origem.getBoundingClientRect) {
-            const rect = origem.getBoundingClientRect();
-
-            x = rect.left + rect.width / 2;
-            y = rect.top + rect.height / 2;
-        }
-
-        bilhete.style.left = `${x}px`;
-        bilhete.style.top = `${y}px`;
-
-        document.body.appendChild(bilhete);
-
-        window.setTimeout(() => {
-            bilhete.remove();
-        }, 1100);
-    }
-
-    // ============================================================
-    // ENCONTRAR O CAMPO DE INTRODUÇÃO MANUAL
-    // ============================================================
-
-    function encontrarInputManual() {
-        const seletoresPreferenciais = [
-            'input.manual-input',
-            'input[name="ticket"]',
-            'input[name="ticketCode"]',
-            'input[placeholder*="senha" i]',
-            'input[aria-label*="senha" i]',
-            'input[placeholder*="código" i]',
-            'input[aria-label*="código" i]',
-            'input[placeholder*="ticket" i]',
-            'input[aria-label*="ticket" i]'
-        ];
-
-        for (const seletor of seletoresPreferenciais) {
-            const campos = Array.from(
-                document.querySelectorAll(seletor)
-            );
-
-            const campo = campos.find(input => {
-                return (
-                    visivel(input) &&
-                    !input.disabled &&
-                    input.type !== 'hidden'
-                );
-            });
-
-            if (campo) {
-                return campo;
-            }
-        }
-
-        // Alternativa: procurar um campo de texto perto
-        // do botão de chamada manual.
-        const botaoManual = document.querySelector(
-            DSP.seletorBotaoManual
-        );
-
-        if (botaoManual) {
-            let elemento = botaoManual.parentElement;
-
-            for (let nivel = 0; nivel < 5 && elemento; nivel++) {
-                const campos = Array.from(
-                    elemento.querySelectorAll(
-                        'input:not([type="hidden"]), textarea'
-                    )
-                );
-
-                const campo = campos.find(input => {
-                    return (
-                        visivel(input) &&
-                        !input.disabled &&
-                        input.type !== 'checkbox' &&
-                        input.type !== 'radio' &&
-                        !input.classList.contains('multiselect-search')
-                    );
-                });
-
-                if (campo) {
-                    return campo;
-                }
-
-                elemento = elemento.parentElement;
-            }
-        }
-
-        return null;
-    }
-
-    function preencherInput(input, codigo) {
-        if (!input) {
-            return false;
-        }
-
-        input.focus();
-
-        const setter = Object.getOwnPropertyDescriptor(
-            Object.getPrototypeOf(input),
-            'value'
-        );
-
-        if (setter && setter.set) {
-            setter.set.call(input, codigo);
-        } else {
-            input.value = codigo;
-        }
-
-        input.dispatchEvent(
-            new Event('input', {
-                bubbles: true
-            })
-        );
-
-        input.dispatchEvent(
-            new Event('change', {
-                bubbles: true
-            })
-        );
-
-        return true;
-    }
-
-    // ============================================================
-    // ATUALIZAR O TEXTO DO BOTÃO
-    // ============================================================
 
     function atualizarTextoBotao() {
-        if (!botaoPersonalizado) {
-            return;
-        }
+        const botao = document.getElementById(BOTAO_ID);
+
+        if (!botao || aChamar) return;
 
         const resultado = obterMaisAntiga();
 
         if (resultado.erro) {
-            botaoPersonalizado.textContent = 'Próxima senha · DSP';
-            botaoPersonalizado.title = resultado.erro;
-            botaoPersonalizado.classList.add('dsp-sem-senhas');
+            botao.textContent = '⚠️ A verificar fila';
+            botao.title = resultado.erro;
+            botao.disabled = true;
             return;
         }
 
         if (!resultado.senha) {
-            botaoPersonalizado.textContent = 'Sem senhas · DSP';
-            botaoPersonalizado.title = 'Não existem senhas à espera.';
-            botaoPersonalizado.classList.add('dsp-sem-senhas');
+            botao.textContent = '⭐ Sem senhas em espera ⭐';
+            botao.title = 'Não foram encontradas senhas.';
+            botao.disabled = true;
             return;
         }
 
-        const prioritarias = resultado.senhas.filter(senha => {
-            return /^E\d+/i.test(
-                senha.codigo.replace(/\s+/g, '')
-            );
-        });
+        const s = resultado.senha;
+        const prioridadeE = /^E\d/i.test(
+            s.codigo.replace(/\s+/g, '')
+        );
 
-        if (prioritarias.length > 0) {
-            botaoPersonalizado.textContent =
-                `Chamar ${resultado.senha.codigo} · PRIORITÁRIA`;
+        botao.textContent =
+            `⭐ Chamar mais antiga (${s.codigo} - ${s.textoTempo}) ⭐`;
 
-            botaoPersonalizado.title =
-                `Senha E prioritária — espera ${resultado.senha.textoTempo}`;
-        } else {
-            botaoPersonalizado.textContent =
-                `Chamar ${resultado.senha.codigo} · DSP`;
+        botao.title =
+            `${prioridadeE ? 'Prioridade: senha E' : 'Maior tempo de espera'}\n` +
+            `${s.tipologia}\nTempo: ${s.textoTempo} (${s.segundos} segundos)`;
 
-            botaoPersonalizado.title =
-                `Maior tempo de espera: ${resultado.senha.textoTempo}`;
-        }
-
-        botaoPersonalizado.classList.remove('dsp-sem-senhas');
+        botao.disabled = false;
     }
 
-    // ============================================================
-    // CHAMAR A SENHA SELECIONADA
-    // ============================================================
+    function encontrarInputManual() {
+        const inputs = Array.from(document.querySelectorAll(
+            'input[type="text"], input:not([type]), input[type="search"]'
+        )).filter(el =>
+            visivel(el) && !el.disabled && !el.readOnly
+        );
 
-    async function chamarSenha() {
-        if (processando || reiniciando) {
+        return inputs.find(el => {
+            const info = normalizar([
+                el.placeholder,
+                el.name,
+                el.id,
+                el.getAttribute('aria-label')
+            ].join(' '));
+
+            return info.includes('senha') || info.includes('codigo');
+        }) || inputs[0] || null;
+    }
+
+    function preencherInput(input, valor) {
+        const setter = Object.getOwnPropertyDescriptor(
+            HTMLInputElement.prototype, 'value'
+        )?.set;
+
+        if (setter) setter.call(input, valor);
+        else input.value = valor;
+
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+
+    function chamarSenha() {
+        if (aChamar) return;
+
+        // Reanalisa a fila imediatamente antes da chamada.
+        const resultado = obterMaisAntiga();
+
+        console.table(resultado.senhas.map(s => ({
+            senha: s.codigo,
+            tipologia: s.tipologia,
+            tempo: s.textoTempo,
+            segundos: s.segundos
+        })));
+
+        if (resultado.erro) {
+            alert(resultado.erro + '\nA chamada foi cancelada.');
+            atualizarTextoBotao();
             return;
         }
 
-        processando = true;
-
-        if (botaoPersonalizado) {
-            botaoPersonalizado.disabled = true;
-            botaoPersonalizado.textContent = 'A selecionar senha...';
+        if (!resultado.senha) {
+            alert('Não existem senhas em espera.');
+            atualizarTextoBotao();
+            return;
         }
 
-        try {
-            // Voltar a ler a fila imediatamente antes de selecionar.
-            const resultado = obterMaisAntiga();
+        const senha = resultado.senha;
+        const codigo = senha.codigo;
 
-            if (resultado.erro) {
-                console.warn('[DSP]', resultado.erro);
+        console.log(
+            'SENHA ESCOLHIDA:',
+            codigo,
+            '| TEMPO:',
+            senha.textoTempo,
+            '| SEGUNDOS:',
+            senha.segundos
+        );
+
+        const input = encontrarInputManual();
+
+        if (!input) {
+            alert('Não foi encontrada a caixa da senha manual.');
+            return;
+        }
+
+        aChamar = true;
+        animarSenhaPuxada(codigo);
+
+        const botao = document.getElementById(BOTAO_ID);
+
+        if (botao) {
+            botao.disabled = true;
+            botao.textContent = `A preparar a chamada: ${codigo}`;
+        }
+
+        preencherInput(input, codigo);
+
+        // Pequena pausa para o site processar o campo.
+        setTimeout(() => tentarClicarTelefone(codigo, 0), 200);
+    }
+
+    function tentarClicarTelefone(codigo, tentativa) {
+        const telefone = document.querySelector('button.manual-button');
+
+        if (!telefone || !visivel(telefone)) {
+            terminarComErro(
+                'Não foi encontrado o botão manual do telefone.'
+            );
+            return;
+        }
+
+        if (telefone.disabled) {
+            if (tentativa < 20) {
+                setTimeout(
+                    () => tentarClicarTelefone(codigo, tentativa + 1),
+                    100
+                );
                 return;
             }
-
-            if (!resultado.senha) {
-                console.info('[DSP] Não existem senhas à espera.');
-                return;
-            }
-
-            const senha = resultado.senha;
-
-            ultimaSenhaSelecionada = senha.codigo;
-
-            console.log(
-                '[DSP] A preparar a chamada da senha:',
-                senha.codigo
-            );
-
-            const input = encontrarInputManual();
-
-            if (!input) {
-                console.error(
-                    '[DSP] Não foi encontrado o campo de introdução manual.'
-                );
-
-                terminarComErro(
-                    'Não foi encontrado o campo para introduzir a senha.'
-                );
-
-                return;
-            }
-
-            const preenchido = preencherInput(
-                input,
-                senha.codigo
-            );
-
-            if (!preenchido) {
-                terminarComErro(
-                    'Não foi possível preencher o campo da senha.'
-                );
-
-                return;
-            }
-
-            animarSenhaPuxada(
-                senha.codigo,
-                botaoPersonalizado
-            );
-
-            // Esperar que a aplicação atualize o estado do botão manual.
-            let botaoManual = null;
-
-            for (
-                let tentativa = 0;
-                tentativa < DSP.tentativasBotaoManual;
-                tentativa++
-            ) {
-                await new Promise(resolve => {
-                    window.setTimeout(
-                        resolve,
-                        DSP.intervaloTentativas
-                    );
-                });
-
-                botaoManual = document.querySelector(
-                    DSP.seletorBotaoManual
-                );
-
-                if (
-                    botaoManual &&
-                    visivel(botaoManual) &&
-                    !botaoManual.disabled
-                ) {
-                    break;
-                }
-            }
-
-            if (
-                !botaoManual ||
-                !visivel(botaoManual) ||
-                botaoManual.disabled
-            ) {
-                terminarComErro(
-                    'O botão de chamada manual não ficou disponível.'
-                );
-
-                return;
-            }
-
-            console.log(
-                '[DSP] A chamar a senha:',
-                senha.codigo
-            );
-
-            botaoManual.click();
-
-            // Dar tempo à aplicação para atualizar a fila.
-            await new Promise(resolve => {
-                window.setTimeout(resolve, 1200);
-            });
-
-            console.log(
-                '[DSP] Chamada efetuada. A atualizar a seleção.'
-            );
-
-        } catch (erro) {
-            console.error('[DSP] Erro ao chamar a senha:', erro);
 
             terminarComErro(
-                'Ocorreu um erro ao tentar chamar a senha.'
+                'O botão do telefone continuou desativado. ' +
+                'Verifica se o código foi aceite.'
             );
+            return;
+        }
 
-        } finally {
-            processando = false;
+        telefone.click();
 
-            if (botaoPersonalizado) {
-                botaoPersonalizado.disabled = false;
+        console.log('Clique no telefone para a senha:', codigo);
+
+        setTimeout(() => {
+            aChamar = false;
+            atualizarTextoBotao();
+        }, 1500);
+    }
+
+    function terminarComErro(mensagem) {
+        aChamar = false;
+        atualizarTextoBotao();
+        alert(mensagem);
+    }
+
+    // Restaura o botão nativo antes de remover a sobreposição.
+    function removerSobreposicao() {
+        const wrapper = document.getElementById(WRAPPER_ID);
+        const personalizado = document.getElementById(BOTAO_ID);
+
+        if (personalizado) personalizado.remove();
+        if (!wrapper) return;
+
+        const nativo = wrapper.querySelector(
+            'button.primary.action-button, button.primary'
+        );
+
+        if (nativo && wrapper.parentNode) {
+            const estado = nativo._dspOriginalState;
+
+            wrapper.parentNode.insertBefore(nativo, wrapper);
+            wrapper.remove();
+
+            if (estado) {
+                nativo.style.cssText = estado.style;
+                nativo.disabled = estado.disabled;
+
+                if (estado.tabindex === null) {
+                    nativo.removeAttribute('tabindex');
+                } else {
+                    nativo.setAttribute('tabindex', estado.tabindex);
+                }
+
+                if (estado.ariaHidden === null) {
+                    nativo.removeAttribute('aria-hidden');
+                } else {
+                    nativo.setAttribute('aria-hidden', estado.ariaHidden);
+                }
+
+                delete nativo._dspOriginalState;
+            } else {
+                nativo.style.removeProperty('opacity');
+                nativo.style.removeProperty('pointer-events');
+                nativo.disabled = false;
+                nativo.removeAttribute('aria-hidden');
+                nativo.removeAttribute('tabindex');
             }
+        } else {
+            wrapper.remove();
+        }
+    }
+
+    // Cria ou reconstrói o botão sobreposto.
+    function garantirSobreposicao() {
+        const painel = document.querySelector('#call-actions-container');
+        if (!painel) return;
+
+        const nativo =
+            painel.querySelector('button.primary.action-button') ||
+            painel.querySelector('button.primary');
+
+        if (!nativo) return;
+
+        let wrapper = document.getElementById(WRAPPER_ID);
+        let personalizado = document.getElementById(BOTAO_ID);
+
+        if (
+            wrapper &&
+            (!wrapper.isConnected || !wrapper.contains(nativo))
+        ) {
+            wrapper.remove();
+            wrapper = null;
+            personalizado = null;
+        }
+
+        if (!wrapper) {
+            wrapper = document.createElement('div');
+            wrapper.id = WRAPPER_ID;
+
+            Object.assign(wrapper.style, {
+                position: 'relative',
+                display: 'block',
+                width: '100%',
+                padding: '0',
+                margin: '0'
+            });
+
+            nativo.parentNode.insertBefore(wrapper, nativo);
+            wrapper.appendChild(nativo);
+        }
+
+        // Guarda o estado original uma única vez.
+        if (!nativo._dspOriginalState) {
+            nativo._dspOriginalState = {
+                style: nativo.style.cssText,
+                disabled: nativo.disabled,
+                tabindex: nativo.getAttribute('tabindex'),
+                ariaHidden: nativo.getAttribute('aria-hidden')
+            };
+        }
+
+        Object.assign(nativo.style, {
+            display: 'block',
+            width: '100%',
+            boxSizing: 'border-box',
+            margin: '0',
+            opacity: '0',
+            pointerEvents: 'none'
+        });
+
+        nativo.disabled = true;
+        nativo.tabIndex = -1;
+        nativo.setAttribute('aria-hidden', 'true');
+
+        if (!personalizado || !personalizado.isConnected) {
+            personalizado = document.createElement('button');
+            personalizado.id = BOTAO_ID;
+            personalizado.type = 'button';
+
+            Object.assign(personalizado.style, {
+                position: 'absolute',
+                inset: '0',
+                zIndex: '1000',
+                boxSizing: 'border-box',
+                width: '100%',
+                height: '100%',
+                margin: '0',
+                padding: '12px 10px',
+                overflow: 'hidden',
+                background:
+                    'linear-gradient(135deg,#bf953f 0%,#fcf6ba 25%,#b38728 50%,#fbf5b7 75%,#aa771c 100%)',
+                color: '#3b2b00',
+                fontWeight: 'bold',
+                fontSize: '11px',
+                border: '1px solid #967117',
+                borderRadius: '4px',
+                boxShadow: '0 2px 4px rgba(0,0,0,.15)',
+                cursor: 'pointer',
+                whiteSpace: 'normal'
+            });
+
+            personalizado.addEventListener('click', chamarSenha);
+            wrapper.appendChild(personalizado);
+        }
+
+        instalarAnimacoes();
+    }
+
+    // Não volta a clicar no seletor se a tipologia já estiver visível.
+    function verificarEAtivarTipologia() {
+        const area = document.querySelector('.waiting-tickets-expanded');
+
+        if (area) {
+            const colunasVisiveis = Array.from(
+                area.querySelectorAll('.typology-column')
+            ).some(visivel);
+
+            if (colunasVisiveis) {
+                tentouAtivarTipologia = true;
+                return;
+            }
+        }
+
+        if (tentouAtivarTipologia) return;
+
+        const candidatos = Array.from(document.querySelectorAll(
+            'button, a, [role="button"]'
+        )).filter(el => {
+            const t = normalizar(el.innerText);
+
+            return visivel(el) &&
+                !t.includes('fechar') &&
+                (
+                    t.includes('ver senhas por tipologia') ||
+                    (t.includes('tipologia') && t.includes('ver'))
+                );
+        }).sort((a, b) =>
+            (a.innerText || '').length - (b.innerText || '').length
+        );
+
+        if (candidatos.length) {
+            tentouAtivarTipologia = true;
+            candidatos[0].click();
+        }
+    }
+
+    function processarPagina() {
+        verificarEAtivarTipologia();
+        garantirSobreposicao();
+
+        const dados = lerSenhas();
+
+        const assinatura = JSON.stringify({
+            filaEncontrada: dados.filaEncontrada,
+            senhas: dados.senhas.map(s => [
+                s.codigo, s.segundos, s.tipologia
+            ]),
+            invalidas: dados.invalidas
+        });
+
+        const botao = document.getElementById(BOTAO_ID);
+        const botaoNovo = botao && botao.dataset.needsUpdate === '1';
+
+        if (assinatura !== ultimaAssinatura || botaoNovo) {
+            ultimaAssinatura = assinatura;
+
+            if (botao) delete botao.dataset.needsUpdate;
 
             atualizarTextoBotao();
         }
     }
 
-    function terminarComErro(mensagem) {
-        console.error('[DSP]', mensagem);
+    const observer = new MutationObserver(() => {
+        if (temporizadorObserver) return;
 
-        if (botaoPersonalizado) {
-            botaoPersonalizado.title = mensagem;
-            botaoPersonalizado.textContent = 'Tentar novamente · DSP';
-        }
-    }
-
-    // ============================================================
-    // BOTÃO PERSONALIZADO
-    // ============================================================
-
-    function restaurarBotaoNativo() {
-        if (
-            botaoNativoGuardado &&
-            estiloOriginalBotao &&
-            botaoNativoGuardado.isConnected
-        ) {
-            botaoNativoGuardado.style.position =
-                estiloOriginalBotao.position;
-
-            botaoNativoGuardado.style.opacity =
-                estiloOriginalBotao.opacity;
-
-            botaoNativoGuardado.style.pointerEvents =
-                estiloOriginalBotao.pointerEvents;
-
-            botaoNativoGuardado.style.zIndex =
-                estiloOriginalBotao.zIndex;
-
-            botaoNativoGuardado.style.visibility =
-                estiloOriginalBotao.visibility;
-        }
-
-        botaoNativoGuardado = null;
-        estiloOriginalBotao = null;
-    }
-
-    function removerSobreposicao() {
-        if (wrapperBotao) {
-            wrapperBotao.remove();
-        }
-
-        wrapperBotao = null;
-        botaoPersonalizado = null;
-
-        restaurarBotaoNativo();
-    }
-
-    function garantirSobreposicao() {
-        const botaoNativo = Array.from(
-            document.querySelectorAll(DSP.seletorBotaoNativo)
-        ).find(botao => {
-            return (
-                visivel(botao) &&
-                /próxima senha|proxima senha/i.test(
-                    normalizar(botao.textContent)
-                )
-            );
-        });
-
-        if (!botaoNativo) {
-            return;
-        }
-
-        if (
-            botaoPersonalizado &&
-            wrapperBotao &&
-            wrapperBotao.isConnected &&
-            botaoNativoGuardado === botaoNativo
-        ) {
-            posicionarWrapper(botaoNativo);
-            return;
-        }
-
-        removerSobreposicao();
-
-        botaoNativoGuardado = botaoNativo;
-
-        estiloOriginalBotao = {
-            position: botaoNativo.style.position,
-            opacity: botaoNativo.style.opacity,
-            pointerEvents: botaoNativo.style.pointerEvents,
-            zIndex: botaoNativo.style.zIndex,
-            visibility: botaoNativo.style.visibility
-        };
-
-        const rect = botaoNativo.getBoundingClientRect();
-
-        wrapperBotao = document.createElement('div');
-        wrapperBotao.className = 'dsp-botao-wrapper';
-
-        botaoPersonalizado = document.createElement('button');
-        botaoPersonalizado.type = 'button';
-        botaoPersonalizado.className = 'dsp-botao-personalizado';
-        botaoPersonalizado.textContent = 'Próxima senha · DSP';
-
-        botaoPersonalizado.addEventListener('click', chamarSenha);
-
-        wrapperBotao.appendChild(botaoPersonalizado);
-        document.body.appendChild(wrapperBotao);
-
-        posicionarWrapper(botaoNativo);
-
-        // Tornar o botão nativo invisível ao rato, mas mantê-lo no DOM.
-        botaoNativo.style.pointerEvents = 'none';
-        botaoNativo.style.opacity = '0';
-        botaoNativo.style.visibility = 'visible';
-
-        atualizarTextoBotao();
-    }
-
-    function posicionarWrapper(botaoNativo) {
-        if (
-            !wrapperBotao ||
-            !botaoPersonalizado ||
-            !botaoNativo ||
-            !botaoNativo.isConnected
-        ) {
-            return;
-        }
-
-        const rect = botaoNativo.getBoundingClientRect();
-
-        wrapperBotao.style.left =
-            `${rect.left + window.scrollX}px`;
-
-        wrapperBotao.style.top =
-            `${rect.top + window.scrollY}px`;
-
-        wrapperBotao.style.width = `${rect.width}px`;
-        wrapperBotao.style.height = `${rect.height}px`;
-    }
-
-    // ============================================================
-    // DETETAR SE A PÁGINA ESTÁ PRONTA
-    // ============================================================
-
-    function verificarEAtivarTipologia() {
-        const fila = document.querySelector(DSP.seletorFila);
-
-        if (!fila) {
-            return false;
-        }
-
-        garantirSobreposicao();
-
-        return true;
-    }
-
-    function processarPagina() {
-        if (reiniciando) {
-            return;
-        }
-
-        instalarAnimacoes();
-        instalarIndicador();
-        verificarEAtivarTipologia();
-        atualizarTextoBotao();
-    }
-
-    // ============================================================
-    // OBSERVAR ALTERAÇÕES NA FILA
-    // ============================================================
+        temporizadorObserver = setTimeout(() => {
+            temporizadorObserver = null;
+            processarPagina();
+        }, 150);
+    });
 
     function iniciarObservador() {
-        pararObservador();
+        if (!document.body || observerAtivo) return;
 
-        observador = new MutationObserver(() => {
-            if (reiniciando) {
-                return;
-            }
-
-            processarPagina();
-        });
-
-        observador.observe(document.body, {
+        observer.observe(document.body, {
             childList: true,
             subtree: true,
             characterData: true
         });
+
+        observerAtivo = true;
     }
 
     function pararObservador() {
-        if (observador) {
-            observador.disconnect();
-            observador = null;
+        observer.disconnect();
+        observerAtivo = false;
+
+        if (temporizadorObserver) {
+            clearTimeout(temporizadorObserver);
+            temporizadorObserver = null;
         }
     }
 
-    // ============================================================
-    // REINICIALIZAÇÃO INTERNA — SEM RECARREGAR A PÁGINA
-    // ============================================================
-
-    function reiniciarScript(motivo = 'Reinicialização automática') {
-        if (reiniciando) {
-            return;
-        }
-
-        reiniciando = true;
-        identificadorReinicio++;
-
-        console.log('[DSP]', motivo);
+    // Reinicia apenas o estado e a interface do userscript.
+    // Não recarrega a página nem altera o estado do site no servidor.
+    function reiniciarScript() {
+        if (aChamar) return false;
 
         pararObservador();
 
-        if (temporizadorReinicio) {
-            clearTimeout(temporizadorReinicio);
-            temporizadorReinicio = null;
-        }
-
-        processando = false;
-        ultimaSenhaSelecionada = null;
-
         removerSobreposicao();
 
-        const estilos = document.getElementById('dsp-estilos');
+        document.querySelectorAll('.dsp-ticket-flight').forEach(el => {
+            el.remove();
+        });
 
-        if (estilos) {
-            estilos.remove();
-        }
+        tentouAtivarTipologia = false;
+        ultimaAssinatura = '';
 
-        const indicador = document.getElementById('dsp-indicador');
+        const estilo = document.getElementById(ESTILO_ID);
+        if (estilo) estilo.remove();
 
-        if (indicador) {
-            indicador.remove();
-        }
+        processarPagina();
+        iniciarObservador();
 
-        document.querySelectorAll('.dsp-ticket-flight').forEach(
-            elemento => elemento.remove()
+        console.log(
+            '[Worten DSP] Script reinicializado. Fila reanalisada.'
         );
 
-        window.setTimeout(() => {
-            reiniciando = false;
-
-            instalarAnimacoes();
-            instalarIndicador();
-            processarPagina();
-            iniciarObservador();
-
-            console.log('[DSP] Reinicialização concluída.');
-
-            agendarReinicio();
-        }, 500);
+        return true;
     }
 
-    function agendarReinicio() {
-        if (temporizadorReinicio) {
-            clearTimeout(temporizadorReinicio);
+    // Agenda a reinicialização sem interromper uma chamada em curso.
+    function agendarReinicio(atraso = 0) {
+        if (resetAgendado) return;
+
+        resetAgendado = true;
+
+        function executar() {
+            if (aChamar) {
+                setTimeout(executar, 1000);
+                return;
+            }
+
+            try {
+                reiniciarScript();
+            } finally {
+                resetAgendado = false;
+            }
         }
 
-        temporizadorReinicio = window.setTimeout(() => {
-            reiniciarScript('Reinicialização automática após 60 segundos');
-        }, DSP.intervaloReinicio);
+        setTimeout(executar, atraso);
     }
 
-    // ============================================================
-    // DETETAR O BOTÃO "TERMINAR"
-    // ============================================================
+    // Reinicialização periódica: sem location.reload().
+    setInterval(() => {
+        agendarReinicio();
+    }, INTERVALO_REINICIO);
 
-    document.addEventListener('click', evento => {
-        const alvo = evento.target;
+    // Reinicializa após terminar o atendimento.
+    document.addEventListener('click', event => {
+        const alvo = event.target.closest('button, a');
+        if (!alvo) return;
 
-        if (!(alvo instanceof Element)) {
-            return;
-        }
-
-        const botao = alvo.closest(
-            'button, [role="button"], input[type="button"], input[type="submit"]'
-        );
-
-        if (!botao) {
-            return;
-        }
-
-        const texto = normalizar(
-            botao.innerText || botao.value || botao.textContent
-        ).toLowerCase();
-
-        if (
-            texto === 'terminar' ||
-            texto.includes('terminar atendimento') ||
-            texto.includes('terminar sessão')
-        ) {
-            window.setTimeout(() => {
-                reiniciarScript(
-                    'Reinicialização após clicar em Terminar'
-                );
-            }, DSP.atrasoDepoisTerminar);
-        }
-    }, true);
-
-    // ============================================================
-    // MANTER O BOTÃO ALINHADO COM O BOTÃO NATIVO
-    // ============================================================
-
-    window.addEventListener('resize', () => {
-        if (botaoNativoGuardado) {
-            posicionarWrapper(botaoNativoGuardado);
+        if (normalizar(alvo.innerText).includes('terminar')) {
+            agendarReinicio(1500);
         }
     });
 
-    window.addEventListener('scroll', () => {
-        if (botaoNativoGuardado) {
-            posicionarWrapper(botaoNativoGuardado);
-        }
-    }, true);
-
-    // ============================================================
-    // INICIAR O DSP
-    // ============================================================
-
-    function iniciar() {
-        instalarAnimacoes();
-        instalarIndicador();
+    // Primeira execução.
+    setTimeout(() => {
         processarPagina();
         iniciarObservador();
-        agendarReinicio();
-
-        console.log(
-            '[DSP] Script iniciado. Prioridade às senhas E ativada.'
-        );
-    }
-
-    window.setTimeout(iniciar, DSP.atrasoInicial);
+    }, 1500);
 
 })();
+```
