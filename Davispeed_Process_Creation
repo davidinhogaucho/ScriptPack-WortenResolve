@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Davispeed Process Creation
 // @namespace    https://www.worten.pt/
-// @version      0.6.7
+// @version      0.6.9
 // @description  Assistente de preenchimento da Worten Resolve
 // @match        *://www.worten.pt/resolve/forms/*
 // @match        *://*.worten.pt/resolve/forms/*
@@ -358,9 +358,7 @@
 
     console.log(`[Davispeed] Selecionada a opção "${label}".`, target);
     return true;
-  }
-
-  function findNextButton() {
+  }  function findNextButton() {
     const candidates = [
       ...document.querySelectorAll('button'),
       ...document.querySelectorAll('[role="button"]')
@@ -696,9 +694,7 @@
     if (!month) {
       console.warn('[Davispeed] Campo do mês não encontrado.');
       return false;
-    }
-
-    let year = fields.find(element =>
+    }    let year = fields.find(element =>
       element !== day &&
       element !== month &&
       (
@@ -1143,9 +1139,7 @@
 
           if (!await advance('purchaseDate')) return;
           continue;
-        }
-
-        if (stage === 'pvp') {
+        }        if (stage === 'pvp') {
           const price = await fillNumberField('input[name="7988"]', 200);
 
           if (!price) {
@@ -1510,6 +1504,225 @@
     }
   }
 
+  function visiblePageElements(selector) {
+    return [...document.querySelectorAll(selector)].filter(visible);
+  }
+
+  function findPageButton(label) {
+    const wanted = lower(label);
+    return visiblePageElements('button,[role="button"]').find(element => {
+      const rawText = lower(element.innerText || element.textContent || element.getAttribute('aria-label') || '');
+      const text = rawText.replace(/^save\s*/, '');
+      return text === wanted && !element.disabled && element.getAttribute('aria-disabled') !== 'true';
+    }) || null;
+  }
+
+  async function waitForPageElement(selector, timeout = 12000, predicate = null) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (stopRequested) return null;
+      const element = visiblePageElements(selector).find(item => !predicate || predicate(item));
+      if (element) return element;
+      await sleep(250);
+    }
+    return null;
+  }
+
+  async function clickPageButton(label, timeout = 12000) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      if (stopRequested) return false;
+      const button = findPageButton(label);
+      if (button) {
+        button.scrollIntoView({ block: 'center', behavior: 'auto' });
+        await sleep(150);
+        button.click();
+        console.log(`[Davispeed] Clicou no botão da página: ${label}.`, button);
+        return true;
+      }
+      await sleep(250);
+    }
+    return false;
+  }  async function fillPageTextarea(placeholder, value) {
+    const wanted = String(value || '').trim().slice(0, 1000);
+    if (!wanted) return false;
+
+    const selector = `textarea[placeholder="${CSS.escape(placeholder)}"]`;
+    const field = await waitForPageElement(selector, 15000);
+    if (!field) return false;
+
+    field.scrollIntoView({ block: 'center', behavior: 'auto' });
+    try { field.focus({ preventScroll: true }); } catch (_) { field.focus(); }
+
+    // Usar o setter nativo e eventos input/change para atualizar o estado reativo do portal.
+    setNativeValue(field, wanted);
+    field.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    field.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    field.blur();
+
+    // Confirmar depois de o Vue atualizar o DOM/estado.
+    for (let i = 0; i < 12; i++) {
+      await sleep(200);
+      const current = document.querySelector(selector);
+      if (current && visible(current) && String(current.value || '').trim() === wanted) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  async function selectBrandDiagnosisResult() {
+    const inputSelector = 'input.multiselect-search[aria-placeholder="Indique o resultado do diagnóstico"]';
+    const search = await waitForPageElement(inputSelector, 15000);
+    if (!search) throw new Error('Não encontrei o campo de resultado do diagnóstico.');
+
+    const container = search.closest('.multiselect-container');
+    if (!container) throw new Error('Não encontrei a caixa do resultado do diagnóstico.');
+
+    container.scrollIntoView({ block: 'center', behavior: 'auto' });
+
+    // Este multiselect é controlado pelo Vue: abrir a caixa, focar o input e emitir eventos de rato/teclado.
+    container.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    container.click();
+    search.focus();
+    search.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    search.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    search.click();
+    search.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+
+    const dropdownSelector = '.multiselect-container .multiselect-dropdown:not(.is-hidden)';
+    const dropdown = await waitForPageElement(dropdownSelector, 5000);
+
+    if (!dropdown) {
+      // Segundo intento: clicar diretamente na área da caixa e voltar a focar o input.
+      container.click();
+      search.focus();
+    }
+
+    const optionSelector = 'li.multiselect-option[role="option"][aria-label="Reparar na marca"]';
+    let option = await waitForPageElement(optionSelector, 10000);
+
+    if (!option) {
+      // Fallback pela identificação interna da opção usada pelo portal.
+      option = await waitForPageElement('li#multiselect-option-Depot\\ Repair[role="option"]', 3000);
+    }
+
+    if (!option) {
+      throw new Error('Não consegui abrir a lista ou encontrar a opção “Reparar na marca”.');
+    }
+
+    option.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+    option.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+    option.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+    option.click();
+
+    // Esperar que o componente confirme a seleção no rótulo e no input fake requerido.
+    for (let i = 0; i < 20; i++) {
+      await sleep(200);
+
+      const labelSelected = [...document.querySelectorAll('.multiselect-single-label-text')]
+        .some(el => visible(el) && lower(el.textContent) === 'reparar na marca');
+
+      const fakeSelected = [...document.querySelectorAll('input.multiselect-fake-input')]
+        .some(el => String(el.value || '').trim() === 'Depot Repair');
+
+      const optionSelected = option.isConnected && option.getAttribute('aria-selected') === 'true';
+
+      if (labelSelected && fakeSelected && optionSelected) return true;
+    }
+
+    throw new Error('A caixa abriu, mas o portal não confirmou “Reparar na marca” como selecionado.');
+  }
+
+  async function forwardProcessToBrand() {
+    if (running) {
+      status('A automação de preenchimento já está em execução. Espera que termine.', 'warn');
+      return;
+    }
+
+    readPanel();
+
+    const anomaly = String(ui.otherProblem.value || '').trim();
+
+    if (!anomaly) {
+      status('Preenche primeiro a Descrição da avaria / anomalia no painel.', 'error');
+      ui.otherProblem.focus();
+      return;
+    }
+
+    const confirmed = window.confirm(
+      'Encaminhar processo para a marca?\n\n' +
+      'O sistema vai clicar em Encaminhar, submeter, iniciar o diagnóstico técnico, ' +
+      'selecionar Reparar na marca, preencher os três campos com a anomalia e submeter novamente.'
+    );
+
+    if (!confirmed) return;
+
+    ui.forwardBrand.disabled = true;
+    ui.start.disabled = true;
+    ui.stop.disabled = false;
+    stopRequested = false;
+
+    try {
+      status('Passo 1/5: a encaminhar o processo…', 'info');
+
+      if (!await clickPageButton('Encaminhar')) {
+        throw new Error('Não encontrei o botão Encaminhar na página.');
+      }
+
+      status('Passo 2/5: a submeter o encaminhamento…', 'info');
+
+      if (!await clickPageButton('Submeter', 15000)) {
+        throw new Error('Não encontrei o botão Submeter após clicar em Encaminhar.');
+      }
+
+      await sleep(700);
+
+      status('Passo 3/5: a iniciar o Diagnóstico Técnico…', 'info');
+
+      if (!await clickPageButton('Iniciar Diagnóstico Técnico', 20000)) {
+        throw new Error('Não encontrei o botão Iniciar Diagnóstico Técnico após submeter.');
+      }
+
+      status('A selecionar “Reparar na marca”…', 'info');
+      await selectBrandDiagnosisResult();
+
+      status('Passo 4/5: a preencher a anomalia nos três campos…', 'info');
+
+      const fields = [
+        'Descreva as anomalias encontradas no equipamento de forma clara e concisa.',
+        'Liste os testes realizados para diagnosticar o problema.',
+        'Descreva as ações tomadas para corrigir o problema.'
+      ];
+
+      for (const placeholder of fields) {
+        if (stopRequested) throw new Error('Operação interrompida pelo utilizador.');
+
+        if (!await fillPageTextarea(placeholder, anomaly)) {
+          throw new Error(`Não consegui preencher ou confirmar o campo: “${placeholder}”.`);
+        }
+      }
+
+      status('Passo 5/5: a submeter o diagnóstico técnico…', 'info');
+
+      if (!await clickPageButton('Submeter', 12000)) {
+        throw new Error('Não encontrei o botão Submeter para guardar o diagnóstico.');
+      }
+
+      await sleep(600);
+
+      status('Processo encaminhado para a marca e diagnóstico submetido.', 'success');
+      console.log('[Davispeed] Encaminhamento para a marca concluído.');
+    } catch (error) {
+      console.error('[Davispeed] Erro ao encaminhar para a marca:', error);
+      status(error.message || 'Ocorreu um erro ao encaminhar o processo.', 'error');
+    } finally {
+      ui.forwardBrand.disabled = false;
+      ui.stop.disabled = true;
+      syncStartButton();
+    }
+  }
+
   function createUI() {
     const host = document.createElement('div');
 
@@ -1591,9 +1804,7 @@
           font-weight: 900;
           letter-spacing: -1.2px;
           text-shadow: 0 1px 2px #0005;
-        }
-
-        /*
+        }        /*
          * Menu redimensionável.
          * Altura inicial de 58vh, podendo ser aumentada ou diminuída
          * manualmente pelo canto inferior direito.
@@ -1708,6 +1919,24 @@
         .primary {
           background: #176a48;
           color: #fff;
+        }
+
+        .brand-forward {
+          width: 100%;
+          margin-top: 9px;
+          border: 0;
+          border-radius: 8px;
+          padding: 11px 12px;
+          background: #9a5a08;
+          color: #fff;
+          font-size: 13px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: background 150ms ease;
+        }
+
+        .brand-forward:hover:not(:disabled) {
+          background: #7c4706;
         }
 
         .secondary {
@@ -1897,6 +2126,10 @@
           </button>
         </div>
 
+        <button class="brand-forward" id="forwardBrand" type="button">
+          Encaminhar processo (marca)
+        </button>
+
         <div class="status" id="status" data-kind="info" role="status">
           Preenche os campos obrigatórios.
         </div>
@@ -1921,9 +2154,7 @@
       option.value = value;
       option.textContent = value;
       $('problem').appendChild(option);
-    }
-
-    ui = {
+    }    ui = {
       toggle: $('toggle'),
       panel: $('panel'),
       close: $('close'),
@@ -1944,6 +2175,7 @@
 
       start: $('start'),
       stop: $('stop'),
+      forwardBrand: $('forwardBrand'),
       status: $('status')
     };
 
@@ -1958,6 +2190,10 @@
     ui.start.addEventListener('click', () => {
       console.log('[Davispeed] Botão Iniciar / Continuar acionado.');
       void run();
+    });
+
+    ui.forwardBrand.addEventListener('click', () => {
+      void forwardProcessToBrand();
     });
 
     ui.stop.addEventListener('click', async () => {
